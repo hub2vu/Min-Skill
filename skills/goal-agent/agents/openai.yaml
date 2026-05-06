@@ -1,0 +1,4 @@
+interface:
+  display_name: "Goal Agent"
+  short_description: "Run /goal requests through a goals-enabled Codex agent."
+  default_prompt: "Use this when a user enters /goal and wants a goals-enabled Codex agent to execute or orchestrate the objective."
