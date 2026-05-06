@@ -1,0 +1,4 @@
+interface:
+  display_name: "ChatGPT Pro Oracle"
+  short_description: "Run Oracle browser mode with ChatGPT Pro GPT-5.5 Pro."
+  default_prompt: "Use $pro to ask ChatGPT Pro GPT-5.5 Pro through Oracle browser mode."
