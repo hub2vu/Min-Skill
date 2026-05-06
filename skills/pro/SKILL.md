@@ -44,19 +44,25 @@ Oracle requires Node.js 24+. If the script reports an older Node version, tell t
 The script calls:
 
 ```powershell
-npx -y @steipete/oracle --engine browser --model gpt-5.5-pro --browser-manual-login --browser-thinking-time heavy
+npx -y @steipete/oracle --engine browser --model gpt-5.5-pro --browser-manual-login
 ```
 
-It also enables Oracle auto-reattach defaults for long Pro responses. Use script flags to override:
+For Pro models, the script intentionally does not pass `--browser-thinking-time` by default. Playwright verification on 2026-05-06 showed that passing `--browser-thinking-time heavy` can leave ChatGPT on `Thinking • Heavy` instead of selecting `Pro`. It also enables Oracle auto-reattach defaults for long Pro responses. Use script flags to override:
 
 - `-Model`: defaults to `gpt-5.5-pro`
-- `-ThinkingTime`: defaults to `heavy`
+- `-ThinkingTime`: defaults to `heavy` for non-Pro models
+- `-ForceThinkingTime`: also passes `-ThinkingTime` for Pro models, only after manually verifying the ChatGPT UI behavior
 - `-File`: one or more file paths/globs
 - `-FirstLogin`: opens the persistent browser profile and waits for manual ChatGPT login
 - `-DryRun`: previews Oracle's browser plan without sending
 - `-CopyOnly`: renders and copies the bundle for manual paste instead of browser automation
 - `-PrintCommand`: prints the resolved command without running Oracle
 - `-SkipEnvironmentCheck`: bypasses local Node version checks when only inspecting command generation
+- `-BrowserPort`: passes a fixed Chrome DevTools port for Playwright verification or debugging
+- `-NoBrowserLock`: bypasses the local browser-mode lock; use only when you intentionally manage isolated browser sessions yourself
+- `-BrowserLockTimeoutSeconds`: maximum wait for another browser-mode `/pro` run to finish; defaults to `7200`
+
+Browser-mode `/pro` calls are serialized by default. Parallel Oracle browser automation can race over the same ChatGPT browser profile/window, and one completed run can close a browser window before another run has finished. The wrapper also treats Oracle "Chrome window closed before oracle finished" / "Chrome disconnected before completion" messages as failures even if Oracle exits with code `0`.
 
 ## Guardrails
 

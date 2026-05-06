@@ -8,13 +8,17 @@ param(
     [switch]$DryRun,
     [switch]$CopyOnly,
     [switch]$KeepBrowser,
+    [switch]$ForceThinkingTime,
     [switch]$PrintCommand,
     [switch]$SkipEnvironmentCheck,
     [int]$InputTimeoutMs = 120000,
     [string]$AutoReattachDelay = "5s",
     [string]$AutoReattachInterval = "3s",
     [string]$AutoReattachTimeout = "60s",
-    [int]$HeartbeatSeconds = 30
+    [int]$HeartbeatSeconds = 30,
+    [int]$BrowserPort = 0,
+    [switch]$NoBrowserLock,
+    [int]$BrowserLockTimeoutSeconds = 7200
 )
 
 $ErrorActionPreference = "Stop"
@@ -28,6 +32,24 @@ function Quote-Arg {
 }
 
 function Find-Npx {
+    $projectNodeDir = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\..\..\.tools\node-v24.15.0-win-x64"))
+    $projectNode = Join-Path $projectNodeDir "node.exe"
+    $projectNpx = Join-Path $projectNodeDir "npx.cmd"
+    if ((Test-Path -LiteralPath $projectNode) -and (Test-Path -LiteralPath $projectNpx)) {
+        if (-not $SkipEnvironmentCheck) {
+            $nodeVersionText = (& $projectNode --version).Trim()
+            if ($nodeVersionText -notmatch '^v?(\d+)\.') {
+                throw "Could not determine project Node.js version from '$nodeVersionText'. Oracle requires Node.js 24+."
+            }
+            $nodeMajor = [int]$Matches[1]
+            if ($nodeMajor -lt 24) {
+                throw "Oracle requires Node.js 24+. Project Node.js is $nodeVersionText at $projectNode."
+            }
+        }
+        $script:ProjectNodeDir = $projectNodeDir
+        return $projectNpx
+    }
+
     if (-not $SkipEnvironmentCheck) {
         $node = Get-Command "node" -ErrorAction SilentlyContinue
         if (-not $node) {
@@ -54,6 +76,40 @@ function Find-Npx {
     return $npx.Source
 }
 
+function Acquire-BrowserLock {
+    param([int]$TimeoutSeconds)
+
+    $lockPath = Join-Path ([System.IO.Path]::GetTempPath()) "codex-pro-browser.lock"
+    $deadline = (Get-Date).AddSeconds([Math]::Max(1, $TimeoutSeconds))
+    $announced = $false
+
+    while ($true) {
+        try {
+            $stream = [System.IO.File]::Open(
+                $lockPath,
+                [System.IO.FileMode]::OpenOrCreate,
+                [System.IO.FileAccess]::ReadWrite,
+                [System.IO.FileShare]::None
+            )
+            $stream.SetLength(0)
+            $content = "pid=$PID`nstarted=$(Get-Date -Format 'yyyy-MM-dd HH:mm:ss K')`n"
+            $bytes = [System.Text.Encoding]::UTF8.GetBytes($content)
+            $stream.Write($bytes, 0, $bytes.Length)
+            $stream.Flush()
+            return $stream
+        } catch [System.IO.IOException] {
+            if ((Get-Date) -ge $deadline) {
+                throw "Timed out waiting for /pro browser lock at $lockPath. Another browser-mode Pro run may still be active."
+            }
+            if (-not $announced) {
+                Write-Host "[pro] Waiting for active browser-mode Pro run to finish..."
+                $announced = $true
+            }
+            Start-Sleep -Seconds 5
+        }
+    }
+}
+
 if ($FirstLogin -and [string]::IsNullOrWhiteSpace($Prompt)) {
     $Prompt = "HI"
 }
@@ -63,6 +119,9 @@ if (-not $FirstLogin -and [string]::IsNullOrWhiteSpace($Prompt)) {
 }
 
 $npxPath = Find-Npx
+if ($script:ProjectNodeDir) {
+    $env:Path = "$script:ProjectNodeDir;$env:Path"
+}
 $oracleArgs = @(
     "-y",
     "@steipete/oracle"
@@ -74,9 +133,16 @@ if ($CopyOnly) {
     $oracleArgs += @(
         "--engine", "browser",
         "--model", $Model,
-        "--browser-manual-login",
-        "--browser-thinking-time", $ThinkingTime
+        "--browser-manual-login"
     )
+
+    $shouldPassThinkingTime = -not [string]::IsNullOrWhiteSpace($ThinkingTime)
+    if ($Model -match '(?i)\bpro\b' -and -not $ForceThinkingTime) {
+        $shouldPassThinkingTime = $false
+    }
+    if ($shouldPassThinkingTime) {
+        $oracleArgs += @("--browser-thinking-time", $ThinkingTime)
+    }
 }
 
 if ($FirstLogin) {
@@ -97,6 +163,10 @@ if ($KeepBrowser -and -not $CopyOnly -and -not $FirstLogin) {
     $oracleArgs += "--browser-keep-browser"
 }
 
+if ($BrowserPort -gt 0 -and -not $CopyOnly) {
+    $oracleArgs += @("--browser-port", [string]$BrowserPort)
+}
+
 if ($DryRun) {
     $oracleArgs += @("--dry-run", "summary")
 }
@@ -115,5 +185,44 @@ if ($PrintCommand) {
     exit 0
 }
 
-& $npxPath @oracleArgs
-exit $LASTEXITCODE
+$browserLock = $null
+$capturePath = $null
+$finalExitCode = 0
+
+try {
+    if (-not $CopyOnly -and -not $DryRun -and -not $NoBrowserLock) {
+        $browserLock = Acquire-BrowserLock -TimeoutSeconds $BrowserLockTimeoutSeconds
+    }
+
+    $capturePath = [System.IO.Path]::GetTempFileName()
+    & $npxPath @oracleArgs 2>&1 | Tee-Object -FilePath $capturePath
+    $oracleExitCode = if ($null -eq $LASTEXITCODE) { 0 } else { [int]$LASTEXITCODE }
+
+    $oracleText = ""
+    if (Test-Path -LiteralPath $capturePath) {
+        $oracleText = Get-Content -LiteralPath $capturePath -Raw -ErrorAction SilentlyContinue
+    }
+
+    if ($oracleText -match "ERROR:\s*Chrome window closed before oracle finished|Chrome disconnected before completion") {
+        $oracleExitCode = 1
+    }
+
+    $finalExitCode = $oracleExitCode
+} finally {
+    if ($capturePath -and (Test-Path -LiteralPath $capturePath)) {
+        Remove-Item -LiteralPath $capturePath -Force -ErrorAction SilentlyContinue
+    }
+    if ($browserLock) {
+        if ($browserLock -is [System.Array]) {
+            foreach ($item in $browserLock) {
+                if ($item -is [System.IDisposable]) {
+                    $item.Dispose()
+                }
+            }
+        } elseif ($browserLock -is [System.IDisposable]) {
+            $browserLock.Dispose()
+        }
+    }
+}
+
+exit $finalExitCode
