@@ -59,7 +59,9 @@ For Pro models, the script intentionally does not pass `--browser-thinking-time`
 - `-PrintCommand`: prints the resolved command without running Oracle
 - `-SkipEnvironmentCheck`: bypasses local Node version checks when only inspecting command generation
 - `-BrowserPort`: passes a fixed Chrome DevTools port for Playwright verification or debugging
+- `-BrowserModelStrategy`: defaults to `auto`; for Pro models this resolves to Oracle's `ignore` strategy after the wrapper preselects the visible ChatGPT `Pro` option with Playwright. Use `select` only after verifying the picker labels match Oracle.
 - `-NoBrowserLock`: bypasses the local browser-mode lock; use only when you intentionally manage isolated browser sessions yourself
+- `-SkipBrowserModelPreselect`: skips the Playwright preselection step; use only when manually debugging ChatGPT UI state
 - `-BrowserLockTimeoutSeconds`: maximum wait for another browser-mode `/pro` run to finish; defaults to `7200`
 
 Browser-mode `/pro` calls are serialized by default. Parallel Oracle browser automation can race over the same ChatGPT browser profile/window, and one completed run can close a browser window before another run has finished. The wrapper also treats Oracle "Chrome window closed before oracle finished" / "Chrome disconnected before completion" messages as failures even if Oracle exits with code `0`.

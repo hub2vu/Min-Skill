@@ -9,6 +9,8 @@ param(
     [switch]$CopyOnly,
     [switch]$KeepBrowser,
     [switch]$ForceThinkingTime,
+    [ValidateSet("auto", "select", "current", "ignore")]
+    [string]$BrowserModelStrategy = "auto",
     [switch]$PrintCommand,
     [switch]$SkipEnvironmentCheck,
     [int]$InputTimeoutMs = 120000,
@@ -18,6 +20,7 @@ param(
     [int]$HeartbeatSeconds = 30,
     [int]$BrowserPort = 0,
     [switch]$NoBrowserLock,
+    [switch]$SkipBrowserModelPreselect,
     [int]$BrowserLockTimeoutSeconds = 7200
 )
 
@@ -110,6 +113,86 @@ function Acquire-BrowserLock {
     }
 }
 
+function Ensure-ProBrowserModel {
+    if ($SkipBrowserModelPreselect) {
+        return
+    }
+
+    if ($FirstLogin -or $CopyOnly -or $DryRun) {
+        return
+    }
+
+    if ($Model -notmatch '(?i)\bpro\b') {
+        return
+    }
+
+    $projectRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot "..\..\..\.."))
+    $ensureScript = Join-Path $PSScriptRoot "ensure-pro-browser-model.js"
+    if (-not (Test-Path -LiteralPath $ensureScript)) {
+        throw "Missing Pro browser preselect script at $ensureScript."
+    }
+
+    $nodePath = $null
+    $npmPath = $null
+    if ($script:ProjectNodeDir) {
+        $candidateNode = Join-Path $script:ProjectNodeDir "node.exe"
+        $candidateNpm = Join-Path $script:ProjectNodeDir "npm.cmd"
+        if (Test-Path -LiteralPath $candidateNode) {
+            $nodePath = $candidateNode
+        }
+        if (Test-Path -LiteralPath $candidateNpm) {
+            $npmPath = $candidateNpm
+        }
+    }
+
+    if (-not $nodePath) {
+        $nodeCommand = Get-Command "node" -ErrorAction SilentlyContinue
+        if (-not $nodeCommand) {
+            throw "node was not found while preparing ChatGPT Pro selection."
+        }
+        $nodePath = $nodeCommand.Source
+    }
+
+    if (-not $npmPath) {
+        $npmCommand = Get-Command "npm.cmd" -ErrorAction SilentlyContinue
+        if (-not $npmCommand) {
+            $npmCommand = Get-Command "npm" -ErrorAction SilentlyContinue
+        }
+        if (-not $npmCommand) {
+            throw "npm was not found while preparing Playwright for ChatGPT Pro selection."
+        }
+        $npmPath = $npmCommand.Source
+    }
+
+    $playwrightPrefix = Join-Path $projectRoot ".tools\playwright-check"
+    $playwrightModule = Join-Path $playwrightPrefix "node_modules\playwright"
+    if (-not (Test-Path -LiteralPath $playwrightModule)) {
+        Write-Host "[pro] Installing Playwright package for ChatGPT Pro UI verification..."
+        $previousSkipDownload = $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD
+        try {
+            $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = "1"
+            & $npmPath install --prefix $playwrightPrefix playwright
+            if ($LASTEXITCODE -ne 0) {
+                throw "npm install playwright failed with exit code $LASTEXITCODE."
+            }
+        } finally {
+            $env:PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD = $previousSkipDownload
+        }
+    }
+
+    $previousNodePath = $env:NODE_PATH
+    try {
+        $env:NODE_PATH = (Join-Path $playwrightPrefix "node_modules")
+        Write-Host "[pro] Ensuring ChatGPT UI is set to Pro..."
+        & $nodePath $ensureScript
+        if ($LASTEXITCODE -ne 0) {
+            throw "Could not verify/select ChatGPT Pro in the browser UI."
+        }
+    } finally {
+        $env:NODE_PATH = $previousNodePath
+    }
+}
+
 if ($FirstLogin -and [string]::IsNullOrWhiteSpace($Prompt)) {
     $Prompt = "HI"
 }
@@ -130,10 +213,18 @@ $oracleArgs = @(
 if ($CopyOnly) {
     $oracleArgs += @("--render", "--copy")
 } else {
+    $resolvedBrowserModelStrategy = $BrowserModelStrategy
+    if ($resolvedBrowserModelStrategy -eq "auto") {
+        $resolvedBrowserModelStrategy = "select"
+        if ($Model -match '(?i)\bpro\b') {
+            $resolvedBrowserModelStrategy = "ignore"
+        }
+    }
     $oracleArgs += @(
         "--engine", "browser",
         "--model", $Model,
-        "--browser-manual-login"
+        "--browser-manual-login",
+        "--browser-model-strategy", $resolvedBrowserModelStrategy
     )
 
     $shouldPassThinkingTime = -not [string]::IsNullOrWhiteSpace($ThinkingTime)
@@ -193,6 +284,8 @@ try {
     if (-not $CopyOnly -and -not $DryRun -and -not $NoBrowserLock) {
         $browserLock = Acquire-BrowserLock -TimeoutSeconds $BrowserLockTimeoutSeconds
     }
+
+    Ensure-ProBrowserModel
 
     $capturePath = [System.IO.Path]::GetTempFileName()
     & $npxPath @oracleArgs 2>&1 | Tee-Object -FilePath $capturePath
