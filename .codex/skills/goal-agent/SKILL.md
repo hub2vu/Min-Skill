@@ -13,7 +13,7 @@ Run `/goal ...` requests through a separate Codex CLI process with the experimen
 
 1. Treat the entire user message as the goal text.
 2. If the text does not already start with `/goal`, prepend `/goal `.
-3. Resolve the project workspace. For this PCI project, use the `ComfyUI/PCI` directory.
+3. Resolve the project workspace. Use the current workspace root unless the user explicitly gives another path.
 4. Run `scripts/run-goal-agent.ps1` with the goal text, workspace, and an output directory under `docs/goal_agent_runs`.
 5. Read the generated `last_message.md` and summarize the result back to the user.
 
@@ -24,7 +24,7 @@ Use PowerShell:
 ```powershell
 .\.codex\skills\goal-agent\scripts\run-goal-agent.ps1 `
   -Goal "/goal <objective>" `
-  -Workspace "<absolute path to ComfyUI\PCI>"
+  -Workspace "<absolute path to the active workspace>"
 ```
 
 The script writes a timestamped run folder containing:
