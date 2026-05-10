@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@steipete/oracle": "^0.11.0"
+  }
+}

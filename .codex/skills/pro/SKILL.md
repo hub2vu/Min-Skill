@@ -9,6 +9,8 @@ description: Use when the user enters /pro, asks to consult ChatGPT Pro, GPT-5.5
 
 Use Oracle browser mode to send a prompt and optional files to a logged-in ChatGPT Pro browser session with `gpt-5.5-pro`. This is browser automation, not OpenAI API or OAuth, so it needs an interactive ChatGPT login once and can be affected by ChatGPT UI changes.
 
+For this project, the only supported file upload path is: collect the requested files, compress them into one ZIP, then upload that single ZIP through the ChatGPT browser file picker. Do not use Oracle's direct multi-file/text bundling path, rendered copy/paste bundles, or any previous upload fallback. The wrapper enforces a maximum ZIP size of 100 MB before sending.
+
 ## Quick Start
 
 When the user types `/pro <prompt>`, run:
@@ -23,6 +25,8 @@ If the user wants files included, pass them with `-File`:
 & "$PWD\.codex\skills\pro\scripts\invoke-pro.ps1" -Prompt "<prompt>" -File "src/**/*.ts","README.md"
 ```
 
+The wrapper expands those paths/globs, writes one archive under `output\pro_uploads\pro-upload-*.zip`, and passes only that ZIP to Oracle with browser attachments enabled. This matches the manual ChatGPT UI flow of `+` -> add photos/files -> enter the file's absolute path.
+
 For first-time setup, run:
 
 ```powershell
@@ -35,27 +39,31 @@ Oracle requires Node.js 24+. If the script reports an older Node version, tell t
 
 1. Strip the `/pro` prefix from the user's message and treat the rest as the prompt.
 2. Include only files the user explicitly names, or the smallest relevant file set if they ask for context from the current task.
-3. Use `scripts/invoke-pro.ps1` rather than retyping the Oracle command.
-4. Tell the user if Oracle, Node.js, Chrome, or ChatGPT login blocks execution.
-5. If browser automation fails, offer `-CopyOnly` or `-DryRun` as a fallback so the user can paste the rendered bundle manually.
+3. When files are needed, always pass them through `-File` and let the wrapper create one ZIP. Never pass the original files directly to Oracle.
+4. If the prepared ZIP exceeds 100 MB, reduce the file set or prepare a smaller summary/extract before retrying.
+5. Use `scripts/invoke-pro.ps1` rather than retyping the Oracle command.
+6. Tell the user if Oracle, Node.js, Chrome, or ChatGPT login blocks execution.
+7. Use `-DryRun` only to inspect the browser upload plan. Do not use manual paste/copy fallback for file context.
 
 ## Script Behavior
 
-The script calls:
+The script calls project-local Oracle when files are present, because the local copy is patched to treat archives such as `.zip` as browser-uploadable attachments:
 
 ```powershell
-npx -y @steipete/oracle --engine browser --model gpt-5.5-pro --browser-manual-login
+node .\.tools\oracle-local\node_modules\@steipete\oracle\dist\bin\oracle-cli.js --engine browser --model gpt-5.5-pro --browser-manual-login --browser-attachments always --file output\pro_uploads\pro-upload-*.zip
 ```
+
+For prompt-only calls, the script can still use the same local Oracle if available. If the local Oracle package is missing and files are provided, the wrapper installs `@steipete/oracle@0.11.0` project-locally and patches archive extensions for browser upload.
 
 For Pro models, the script intentionally does not pass `--browser-thinking-time` by default. Playwright verification on 2026-05-06 showed that passing `--browser-thinking-time heavy` can leave ChatGPT on `Thinking • Heavy` instead of selecting `Pro`. It also enables Oracle auto-reattach defaults for long Pro responses. Use script flags to override:
 
 - `-Model`: defaults to `gpt-5.5-pro`
 - `-ThinkingTime`: defaults to `heavy` for non-Pro models
 - `-ForceThinkingTime`: also passes `-ThinkingTime` for Pro models, only after manually verifying the ChatGPT UI behavior
-- `-File`: one or more file paths/globs
+- `-File`: one or more file paths/globs; the wrapper always compresses them into a single ZIP and uploads only that ZIP
 - `-FirstLogin`: opens the persistent browser profile and waits for manual ChatGPT login
 - `-DryRun`: previews Oracle's browser plan without sending
-- `-CopyOnly`: renders and copies the bundle for manual paste instead of browser automation
+- `-CopyOnly`: disabled in this project
 - `-PrintCommand`: prints the resolved command without running Oracle
 - `-SkipEnvironmentCheck`: bypasses local Node version checks when only inspecting command generation
 - `-BrowserPort`: passes a fixed Chrome DevTools port for Playwright verification or debugging
